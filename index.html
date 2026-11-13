@@ -110,7 +110,20 @@ h3{font-size:17px;font-weight:600}
 .obj-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:0 10px 6px;border-bottom:2px solid var(--rule)}
 .obj-head .sub{font-family:var(--display);font-weight:600;font-size:19px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .obj ul{list-style:none;margin:4px 0 0;padding:0}
-.task{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;text-align:left;padding:9px 10px;border:0;background:transparent;border-radius:8px}
+.trow{display:flex;align-items:center;gap:2px}
+.task{flex:1;min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;text-align:left;padding:9px 6px 9px 10px;border:0;background:transparent;border-radius:8px}
+.fail{flex:none;width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:var(--muted);opacity:.55}
+.fail:hover{opacity:1;color:var(--warn);background:var(--hover)}
+.fail[aria-pressed="true"]{opacity:1;color:var(--surface);background:var(--warn)}
+.fail:disabled{visibility:hidden}
+.box.parts{width:auto;min-width:26px;padding:0 4px;font:600 12px/1 var(--body);color:var(--muted);font-variant-numeric:tabular-nums}
+.task.part .box{border-color:var(--accent);color:var(--accent)}
+.task.part .tpts{background:transparent;box-shadow:inset 0 0 0 2px var(--lamp);color:var(--ink);font-size:17px}
+.task.failed .box{border-color:var(--warn);color:var(--warn)}
+.task.failed .tname{color:var(--muted);text-decoration:line-through}
+.task.failed .tname small{display:inline-block;width:100%;text-decoration:none}
+.task.failed .tpts{background:transparent;box-shadow:inset 0 0 0 2px var(--warn);color:var(--warn)}
+.task.failed:disabled{opacity:1}
 .task:hover{background:var(--hover)}
 .box{width:26px;height:26px;border:2px solid var(--muted);border-radius:5px;display:grid;place-items:center;color:transparent}
 .task.done .box{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
@@ -131,10 +144,13 @@ h3{font-size:17px;font-weight:600}
 .ed-obj-top{display:flex;gap:10px;align-items:center}
 .in-obj{font-weight:600}
 .ed-obj ul{list-style:none;margin:10px 0 4px;padding:0;display:grid;gap:8px}
-.ed-task{display:grid;grid-template-columns:minmax(0,1fr) 108px 70px 36px;gap:8px;align-items:center}
+.ed-task{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 96px 36px;gap:8px;align-items:center}
+.ed-task > .in:first-child{grid-column:1 / -1}
+.ed-obj ul{gap:16px}
+.pts-wrap{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted)}
+.pts-wrap .in{min-width:0}
 .in-every,.in-ws{padding:8px 6px}
 .ed-win select.in.in-ws{width:auto;min-width:170px}
-@media (max-width:560px){.ed-task{grid-template-columns:minmax(0,1fr) 70px 36px}.ed-task > .in:first-child{grid-column:1 / -1}}
 .per-note{font-size:14px;color:var(--muted);padding:6px 10px 0}
 .tname small{display:block;font-size:13px;color:var(--muted)}
 .in-pts{text-align:center;font-variant-numeric:tabular-nums}
@@ -269,6 +285,7 @@ h3{font-size:17px;font-weight:600}
       <li>Your rating is the running total of those daily results. It moves at midnight, can’t fall below 0, and sets your rank. A bad run demotes you.</li>
       <li>Your rival is you at your recent form. Each day he scores your average from the previous seven days, never less than 60% of the points on offer, and he never skips a day.</li>
       <li>Score more than him to win the day. A perfect day always wins.</li>
+      <li>A task split into parts pays out one part per tick, so half done is half the points and the rest is what midnight takes. The small cross marks a task as failed: it closes the task, stops reminders about it, and its remaining points come off at midnight as usual.</li>
       <li>Weekly and monthly tasks sit outside the daily duel. Ticking one adds its points to that day’s result. One still open when its week or month closes takes its points away that night. A task added part-way through a week or month can earn points straight away but only starts costing you from the next full one. Your rival completes them at your recent rate, never less than 60%.</li>
     </ul>
   </details>
@@ -312,6 +329,8 @@ const WD = ['S','M','T','W','T','F','S'];
 const objectives = () => (state.config && Array.isArray(state.config.objectives)) ? state.config.objectives : [];
 const tasksOf = o => Array.isArray(o.tasks) ? o.tasks : [];
 const every = t => (t.every === 'week' || t.every === 'month') ? t.every : 'day';
+const partsOf = t => { const n = Math.round(+t.parts); return n >= 2 && n <= 12 ? n : 1; };
+const share = (p, k, n) => Math.round((+p || 0) * k / n);   // points for k of n parts
 const allTasks = () => objectives().flatMap(o => tasksOf(o));
 const dailyOf = o => tasksOf(o).filter(t => every(t) === 'day');
 const dailyTasks = () => allTasks().filter(t => every(t) === 'day');
@@ -336,9 +355,14 @@ const monthEnd = k => { const d = dateOf(k); return keyOf(new Date(d.getFullYear
 const periodOf = (type, k) => type === 'week' ? {start: weekStart(k), end: shift(weekStart(k), 6)} : {start: k.slice(0, 8) + '01', end: monthEnd(k)};
 function offerNow(type, p) { const o = {}; periodic(type).forEach(t => { if (t.since && t.since <= p.start) o[t.id] = +t.pts || 0; }); return o; }
 function offer(type, p) { const r = rec(p.end), snap = r && r[SNAP[type]]; return (snap && p.end < todayKey()) ? snap : offerNow(type, p); }
-function ticksIn(type, p) {
-  const out = {};
-  for (let k = p.start; k <= p.end; k = shift(k, 1)) { const m = rec(k) && rec(k)[FIELD[type]]; if (m) for (const id in m) if (!(id in out)) out[id] = {day: k, pts: +m[id] || 0}; }
+/* Where each weekly or monthly task stands in a period: points credited, parts ticked, last tick, failed. */
+function periodState(type, p) {
+  const out = {}, f = FIELD[type], fn = f + 'n', at = id => out[id] || (out[id] = {pts: 0, n: 0, day: '', failed: false});
+  for (let k = p.start; k <= p.end; k = shift(k, 1)) {
+    const r = rec(k); if (!r) continue;
+    if (r[f]) for (const id in r[f]) { const o = at(id); o.pts += +r[f][id] || 0; o.n += (r[fn] && +r[fn][id]) || 1; o.day = k; }
+    if (r.x) for (const id in r.x) at(id).failed = true;
+  }
   return out;
 }
 
@@ -354,7 +378,8 @@ function compute() {
   const t = todayKey(); let f = null;
   for (const k in state.logs) { const r = state.logs[k]; if ((sumOf(r.done) > 0 || sumOf(r.w) > 0 || sumOf(r.m) > 0) && (!f || k < f)) f = k; }
   const out = {t, f, day: {}, rating: 0, rivalRating: 0, w: 0, d: 0, l: 0, streak: 0, bestStreak: 0, last: null};
-  const hist = [], seen = {week: {start: '', ids: new Set()}, month: {start: '', ids: new Set()}}, form = {week: [], month: []};
+  const hist = [], acc = {week: {start: '', got: {}, off: {}}, month: {start: '', got: {}, off: {}}}, form = {week: [], month: []}, cfgPts = {};
+  allTasks().forEach(x => { if (every(x) !== 'day') cfgPts[x.id] = +x.pts || 0; });
   let r = 0, rr = 0, run = 0;
   for (let k = f || t; k <= t; k = shift(k, 1)) {
     const poss = possible(k), earned = pts(k), floor = Math.ceil(poss * RIVAL_FLOOR), open = k === t;
@@ -363,13 +388,17 @@ function compute() {
     rv = Math.min(poss, Math.max(floor, rv));
     let bonus = 0, pen = 0, rextra = 0;
     for (const type of TYPES) {
-      const p = periodOf(type, k), s = seen[type];
-      if (s.start !== p.start) { s.start = p.start; s.ids = new Set(); }
+      const p = periodOf(type, k), a = acc[type];
+      if (a.start !== p.start) { a.start = p.start; a.got = {}; a.off = offer(type, p); }
       const m = rec(k) && rec(k)[FIELD[type]];
-      if (m) for (const id in m) if (!s.ids.has(id)) { s.ids.add(id); bonus += +m[id] || 0; }
+      if (m) for (const id in m) {                        // credit ticks, never more than the task is worth
+        const cap = a.off[id] != null ? +a.off[id] : (cfgPts[id] != null ? cfgPts[id] : Infinity);
+        const c = Math.max(0, Math.min(+m[id] || 0, cap - (a.got[id] || 0)));
+        a.got[id] = (a.got[id] || 0) + c; bonus += c;
+      }
       if (k === p.end) {                                  // the period closes tonight
-        const off = offer(type, p); let total = 0, got = 0;
-        for (const id in off) { total += +off[id] || 0; if (s.ids.has(id)) got += +off[id] || 0; }
+        const off = a.off; let total = 0, got = 0;
+        for (const id in off) { const w = +off[id] || 0; total += w; got += Math.min(w, a.got[id] || 0); }
         pen += total - got;
         if (total > 0) {
           const past = form[type].slice(-4), rate = Math.min(1, Math.max(RIVAL_FLOOR, past.length ? past.reduce((a, b) => a + b, 0) / past.length : RIVAL_FLOOR));
@@ -476,7 +505,7 @@ function mergeDay(a, b) {
   let la = 0, lb = 0;
   for (const id in aa) if (+aa[id] > la) la = +aa[id];
   for (const id in ba) if (+ba[id] > lb) lb = +ba[id];
-  for (const f of ['done', 'w', 'm']) {
+  for (const f of ['done', 'n', 'x', 'w', 'wn', 'm', 'mn']) {
     const am = a[f] || {}, bm = b[f] || {};
     for (const id of new Set([...Object.keys(am), ...Object.keys(bm)])) {
       const ta = +aa[id] || 0, tb = +ba[id] || 0;
@@ -684,8 +713,11 @@ function renderBoard() {
     else if (p > rv) l1 = 'Ahead of your rival by ' + (p - rv) + '.';
     else if (p === rv) l1 = 'Level with your rival. One more task takes the day.';
     else l1 = (rv - p) + ' behind your rival.';
-    const take = Math.max(0, poss - p) + td.pen;
-    l2 = take ? 'Stop here and midnight takes ' + take + (td.pen ? ' (' + td.pen + ' from tasks closing tonight)' : '') + ', so today lands at ' + signed(td.net) + '.' : 'Midnight has nothing left to take.';
+    const tr = rec(t) || {}; let stake = 0;
+    dailyTasks().forEach(x => { const st = dayState(x, tr); if (!st.failed && st.cur < st.n) stake += Math.max(0, st.full - st.got); });
+    const lost = Math.max(0, poss - p - stake), take = stake + td.pen;
+    l2 = (lost ? lost + ' lost to failed tasks. ' : '') + (take ? 'Stop here and midnight takes ' + (lost ? 'another ' : '') + take + (td.pen ? ' (' + td.pen + ' from tasks closing tonight)' : '') : (lost ? 'Nothing else is at stake' : '')) +
+      (take || lost ? ', so today lands at ' + signed(td.net) + '.' : 'Midnight has nothing left to take.');
   }
   const days = []; for (let i = 13; i >= 0; i--) days.push(shift(t, -i));
   const sel = state.selected || t;
@@ -760,10 +792,9 @@ function renderTasks(force) {
     const mine = dailyOf(o); if (!mine.length && tasksOf(o).length) continue;
     for (const x of mine) {
       known.add(x.id);
-      const isDone = done[x.id] != null, v = isDone ? (+done[x.id] || 0) : (+x.pts || 0);
-      per += v; if (isDone) got += v;
-      rows += '<li><button type="button" class="task' + (isDone ? ' done' : '') + (state.just === x.id ? ' just' : '') + '" data-task="' + esc(x.id) + '" data-fk="task-' + esc(x.id) + '" aria-pressed="' + isDone + '"' + (locked ? ' disabled' : '') + '>' +
-        '<span class="box">' + CHECK + '</span><span class="tname">' + esc(x.name) + '</span><span class="tpts">' + (isDone ? '+' : '') + v + '</span></button></li>';
+      const st = dayState(x, r);
+      per += st.full; got += st.got;
+      rows += taskRow(x, st, 'data-task="' + esc(x.id) + '" data-fk="task-' + esc(x.id) + '"', 'data-fail="' + esc(x.id) + '" data-fk="fail-' + esc(x.id) + '"', locked, st.failed ? 'Failed' : '');
     }
     h += '<section class="obj"><div class="obj-head"><h3>' + esc(o.name) + '</h3><span class="sub">' + got + ' / ' + per + '</span></div>' +
       (rows ? '<ul>' + rows + '</ul>' : '<p class="quiet" style="padding:10px">No tasks in this objective yet.</p>') + '</section>';
@@ -776,16 +807,36 @@ function renderTasks(force) {
   state.just = null;
 }
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const CROSS = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+/* One task row. The wide button ticks the task (one part per click for split tasks, and a click
+   on a finished task clears it). The small button marks it failed, which closes it for the period. */
+function taskRow(x, st, attrs, failAttrs, locked, sub) {
+  const complete = !st.failed && st.cur >= st.n, part = !st.failed && st.cur > 0 && !complete, split = st.n > 1 && !complete && !st.failed;
+  const cls = 'task' + (complete ? ' done' : '') + (part ? ' part' : '') + (st.failed ? ' failed' : '') + (state.just === x.id ? ' just' : '');
+  const box = st.failed ? CROSS : split ? st.cur + '/' + st.n : CHECK;
+  const tile = st.failed ? '−' + Math.max(0, st.full - st.got) : complete ? '+' + st.got : part ? st.got + '/' + st.full : st.full;
+  return '<li class="trow"><button type="button" class="' + cls + '" ' + attrs + ' aria-pressed="' + complete + '"' + (locked || st.failed ? ' disabled' : '') + '>' +
+    '<span class="box' + (split ? ' parts' : '') + '">' + box + '</span><span class="tname">' + esc(x.name) + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span><span class="tpts">' + tile + '</span></button>' +
+    '<button type="button" class="fail" ' + failAttrs + ' aria-pressed="' + !!st.failed + '" aria-label="' + esc((st.failed ? 'Undo failed: ' : 'Mark as failed: ') + x.name) + '" title="' + (st.failed ? 'Undo failed' : 'Mark as failed') + '"' + (locked || complete ? ' disabled' : '') + '>' + CROSS + '</button></li>';
+}
+function dayState(x, r) {
+  const n = partsOf(x), v = r.done ? r.done[x.id] : null, failed = !!(r.x && r.x[x.id]);
+  const cur = v == null ? 0 : (n === 1 ? 1 : Math.min(n, (r.n && +r.n[x.id]) || n));
+  return {n, cur, failed, got: +v || 0, full: (cur >= n && v != null) ? (+v || 0) : (+x.pts || 0)};
+}
 function renderPeriod(type) {
   const list = periodic(type); if (!list.length) return '';
-  const t = todayKey(), p = periodOf(type, t), off = offer(type, p), ticks = ticksIn(type, p);
+  const t = todayKey(), p = periodOf(type, t), off = offer(type, p), ps = periodState(type, p);
   let got = 0, total = 0, rows = '';
   for (const x of list) {
-    const hit = ticks[x.id], v = hit ? hit.pts : (+x.pts || 0), counts = x.id in off;
-    total += v; if (hit) got += v;
-    const sub = hit ? (hit.day === t ? 'Done today' : 'Done ' + fmtShort(hit.day)) : (counts ? '' : (type === 'week' ? 'No penalty this week' : 'No penalty this month'));
-    rows += '<li><button type="button" class="task' + (hit ? ' done' : '') + (state.just === x.id ? ' just' : '') + '" data-ptask="' + esc(x.id) + '" data-ptype="' + type + '" data-fk="ptask-' + esc(x.id) + '" aria-pressed="' + !!hit + '">' +
-      '<span class="box">' + CHECK + '</span><span class="tname">' + esc(x.name) + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span><span class="tpts">' + (hit ? '+' : '') + v + '</span></button></li>';
+    const o = ps[x.id], n = partsOf(x), full = +x.pts || 0, cur = o ? Math.min(n, o.n) : 0;
+    const st = {n, cur, failed: !!(o && o.failed), got: o ? Math.min(o.pts, full) : 0, full};
+    total += full; got += st.got;
+    let sub = '';
+    if (st.failed) sub = 'Failed';
+    else if (cur >= n) sub = o.day === t ? 'Done today' : 'Done ' + fmtShort(o.day);
+    else if (!(x.id in off)) sub = type === 'week' ? 'No penalty this week' : 'No penalty this month';
+    rows += taskRow(x, st, 'data-ptask="' + esc(x.id) + '" data-ptype="' + type + '" data-fk="ptask-' + esc(x.id) + '"', 'data-pfail="' + esc(x.id) + '" data-ptype="' + type + '" data-fk="pfail-' + esc(x.id) + '"', false, sub);
   }
   const left = Math.round((dateOf(p.end) - dateOf(t)) / 86400000);
   const reset = type === 'week' ? WEEKDAYS[weekStartDay()] : 'the 1st';
@@ -795,21 +846,54 @@ function renderPeriod(type) {
 }
 function togglePeriodic(type, id) {
   if (!state.loaded) return;
-  const t = todayKey(), p = periodOf(type, t), f = FIELD[type];
+  const t = todayKey(), p = periodOf(type, t), f = FIELD[type], fn = f + 'n';
   const task = periodic(type).find(x => x.id === id); if (!task) return;
-  const years = stampGaps(), now = Date.now();
-  if (ticksIn(type, p)[id]) {                             // untick: clear it wherever in this period it was ticked
+  const o = periodState(type, p)[id]; if (o && o.failed) return;
+  const years = stampGaps(), now = Date.now(), n = partsOf(task), cur = o ? Math.min(n, o.n) : 0;
+  if (cur >= n) {                                         // finished: a click clears it for this period
     for (let k = p.start; k <= t; k = shift(k, 1)) {
       const r = state.logs[k];
-      if (r && r[f] && r[f][id] != null) { delete r[f][id]; (r.at || (r.at = {}))[id] = now; years.add(k.slice(0, 4)); }
+      if (r && r[f] && r[f][id] != null) { delete r[f][id]; if (r[fn]) delete r[fn][id]; (r.at || (r.at = {}))[id] = now; years.add(k.slice(0, 4)); }
     }
-  } else {
+  } else {                                                // add one part today
     const r = state.logs[t] || (state.logs[t] = {done: {}});
-    (r[f] || (r[f] = {}))[id] = +task.pts || 0; (r.at || (r.at = {}))[id] = now;
+    const add = share(task.pts, cur + 1, n) - share(task.pts, cur, n);
+    (r[f] || (r[f] = {}))[id] = (+r[f][id] || 0) + add;
+    if (n > 1) (r[fn] || (r[fn] = {}))[id] = (+r[fn][id] || 0) + 1;
+    (r.at || (r.at = {}))[id] = now;
     if (r.possible == null) r.possible = possibleNow();
     state.just = id; years.add(t.slice(0, 4));
   }
   years.forEach(y => touch('log/' + y + '.json'));
+  renderAll();
+}
+function togglePFail(type, id) {
+  if (!state.loaded || !periodic(type).some(x => x.id === id)) return;
+  const t = todayKey(), p = periodOf(type, t), o = periodState(type, p)[id];
+  const years = stampGaps(), now = Date.now();
+  if (o && o.failed) {
+    for (let k = p.start; k <= t; k = shift(k, 1)) { const r = state.logs[k]; if (r && r.x && r.x[id]) { delete r.x[id]; (r.at || (r.at = {}))[id] = now; years.add(k.slice(0, 4)); } }
+  } else {
+    const r = state.logs[t] || (state.logs[t] = {done: {}});
+    (r.x || (r.x = {}))[id] = 1; (r.at || (r.at = {}))[id] = now;
+    if (r.possible == null) r.possible = possibleNow();
+    years.add(t.slice(0, 4));
+  }
+  years.forEach(y => touch('log/' + y + '.json'));
+  renderAll();
+}
+function toggleFail(taskId) {
+  if (!state.loaded) return;
+  const t = todayKey(), k = state.selected || t;
+  if (k !== t && state.config && state.config.lock) return;
+  if (!dailyTasks().some(x => x.id === taskId)) return;
+  const years = stampGaps();
+  const r = state.logs[k] || (state.logs[k] = {done: {}});
+  if (!r.x) r.x = {}; if (!r.at) r.at = {};
+  if (r.x[taskId]) delete r.x[taskId]; else r.x[taskId] = 1;
+  r.at[taskId] = Date.now();
+  if (k === t || r.possible == null) r.possible = possibleNow();
+  years.add(k.slice(0, 4)); years.forEach(y => touch('log/' + y + '.json'));
   renderAll();
 }
 function toggle(taskId) {
@@ -822,7 +906,13 @@ function toggle(taskId) {
   const r = state.logs[k] || (state.logs[k] = {done: {}});
   if (!r.done) r.done = {};
   if (!r.at) r.at = {};
-  if (r.done[taskId] != null) delete r.done[taskId]; else { r.done[taskId] = +task.pts || 0; state.just = taskId; }
+  if (r.x && r.x[taskId]) return;                         // failed tasks are closed
+  const st = dayState(task, r), next = st.cur >= st.n ? 0 : st.cur + 1;
+  if (!next) { delete r.done[taskId]; if (r.n) delete r.n[taskId]; }
+  else {
+    r.done[taskId] = share(task.pts, next, st.n); state.just = taskId;
+    if (st.n > 1) (r.n || (r.n = {}))[taskId] = next; else if (r.n) delete r.n[taskId];
+  }
   r.at[taskId] = Date.now();
   if (k === t || r.possible == null) r.possible = possibleNow();
   years.add(k.slice(0, 4)); years.forEach(y => touch('log/' + y + '.json'));
@@ -845,13 +935,14 @@ function renderEditor(el) {
   el.dataset.view = 'edit';
   const d = state.draft;
   let h = '<div class="col-head"><h2>Edit objectives</h2></div>' +
-    '<p class="quiet">Each task has a point value. Ticked, it adds them. Still open when its day, week or month closes at 00:00, it takes them away.</p>';
+    '<p class="quiet">Each task has a point value. Ticked, it adds them. Still open when its day, week or month closes at 00:00, it takes them away. A task split into parts pays out part by part.</p>';
   d.objectives.forEach((o, i) => {
     h += '<div class="ed-obj"><div class="ed-obj-top"><input class="in in-obj" data-f="oname" data-o="' + i + '" data-fk="on-' + i + '" aria-label="Objective name" placeholder="Objective name" maxlength="80" value="' + esc(o.name || '') + '"></div><ul>';
     o.tasks.forEach((x, j) => {
       h += '<li class="ed-task"><input class="in" data-f="tname" data-o="' + i + '" data-t="' + j + '" data-fk="tn-' + i + '-' + j + '" aria-label="Task" placeholder="Task" maxlength="120" value="' + esc(x.name || '') + '">' +
         '<select class="in in-every" data-f="tevery" data-o="' + i + '" data-t="' + j + '" data-fk="te-' + i + '-' + j + '" aria-label="How often">' + ['day', 'week', 'month'].map(v => '<option value="' + v + '"' + (every(x) === v ? ' selected' : '') + '>' + {day: 'Daily', week: 'Weekly', month: 'Monthly'}[v] + '</option>').join('') + '</select>' +
-        '<input class="in in-pts" type="number" min="1" max="999" inputmode="numeric" data-f="tpts" data-o="' + i + '" data-t="' + j + '" data-fk="tp-' + i + '-' + j + '" aria-label="Points" value="' + esc(x.pts) + '">' +
+        '<select class="in in-every" data-f="tparts" data-o="' + i + '" data-t="' + j + '" data-fk="tq-' + i + '-' + j + '" aria-label="Split into parts">' + [1, 2, 3, 4, 5, 6, 8, 10].concat([2, 3, 4, 5, 6, 8, 10].includes(partsOf(x)) || partsOf(x) === 1 ? [] : [partsOf(x)]).map(v => '<option value="' + v + '"' + (partsOf(x) === v ? ' selected' : '') + '>' + (v === 1 ? 'In one go' : v + ' parts') + '</option>').join('') + '</select>' +
+        '<label class="pts-wrap"><input class="in in-pts" type="number" min="1" max="999" inputmode="numeric" data-f="tpts" data-o="' + i + '" data-t="' + j + '" data-fk="tp-' + i + '-' + j + '" aria-label="Points" value="' + esc(x.pts) + '"><span>pts</span></label>' +
         '<button type="button" class="icon" data-act="del-task" data-o="' + i + '" data-t="' + j + '" aria-label="Remove task">×</button></li>';
     });
     h += '</ul><div class="ed-row"><button type="button" class="link" data-act="add-task" data-o="' + i + '">Add a task</button>' +
@@ -867,6 +958,7 @@ function saveEdit() {
   for (const o of state.draft.objectives) {
     const tasks = o.tasks.map(x => {
       const task = {id: x.id || newId('t'), name: String(x.name || '').trim().slice(0, 120), pts: Math.min(999, Math.max(1, Math.round(+x.pts) || 10))}, ev = every(x);
+      if (partsOf(x) > 1) task.parts = partsOf(x);
       if (ev !== 'day') { const was = prev[task.id]; task.every = ev; task.since = (was && every(was) === ev && was.since) ? was.since : todayKey(); }
       return task;
     }).filter(x => x.name);
@@ -1010,7 +1102,7 @@ function renderByObj() {
     const rate = per ? Math.min(100, Math.round(100 * earned / (per * nd))) : 0;
     h += '<div class="orow"><div class="orow-top"><span>' + esc(o.name) + '</span><b>' + rate + '%</b></div><div class="track"><i style="width:' + rate + '%"></i></div></div>';
   }
-  const tl = dailyTasks().map(x => { let hits = 0; ks.forEach(k => { const r = rec(k); if (r && r.done && r.done[x.id] != null) hits++; }); return {x, hits}; });
+  const tl = dailyTasks().map(x => { let hits = 0; ks.forEach(k => { const r = rec(k); if (r && r.done && r.done[x.id] != null) { const st = dayState(x, r); if (st.cur >= st.n) hits++; } }); return {x, hits}; });
   if (nd >= 3 && tl.length >= 2) {
     let hi = tl[0], lo = tl[0];
     tl.forEach(a => { if (a.hits > hi.hits) hi = a; if (a.hits < lo.hits || (a.hits === lo.hits && (+a.x.pts || 0) > (+lo.x.pts || 0))) lo = a; });
@@ -1034,6 +1126,8 @@ document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.task) { toggle(b.dataset.task); return; }
   if (b.dataset.ptask) { togglePeriodic(b.dataset.ptype, b.dataset.ptask); return; }
+  if (b.dataset.fail) { toggleFail(b.dataset.fail); return; }
+  if (b.dataset.pfail) { togglePFail(b.dataset.ptype, b.dataset.pfail); return; }
   if (b.dataset.day) { state.selected = b.dataset.day === todayKey() ? null : b.dataset.day; renderAll(); return; }
   if (b.dataset.chart) { state.chart = b.dataset.chart; renderChart(); return; }
   if (b.dataset.hour) {
@@ -1069,6 +1163,7 @@ document.addEventListener('input', e => {
   if (i.dataset.f === 'ws') { d.weekStart = +i.value; return; }
   const o = d.objectives[+i.dataset.o]; if (!o) return;
   if (i.dataset.f === 'tevery') { o.tasks[+i.dataset.t].every = i.value; return; }
+  if (i.dataset.f === 'tparts') { o.tasks[+i.dataset.t].parts = +i.value; return; }
   if (i.dataset.f === 'oname') o.name = i.value;
   else if (i.dataset.f === 'tname') o.tasks[+i.dataset.t].name = i.value;
   else if (i.dataset.f === 'tpts') o.tasks[+i.dataset.t].pts = i.value;
