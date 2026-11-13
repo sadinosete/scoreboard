@@ -131,7 +131,12 @@ h3{font-size:17px;font-weight:600}
 .ed-obj-top{display:flex;gap:10px;align-items:center}
 .in-obj{font-weight:600}
 .ed-obj ul{list-style:none;margin:10px 0 4px;padding:0;display:grid;gap:8px}
-.ed-task{display:grid;grid-template-columns:minmax(0,1fr) 78px 36px;gap:8px;align-items:center}
+.ed-task{display:grid;grid-template-columns:minmax(0,1fr) 108px 70px 36px;gap:8px;align-items:center}
+.in-every,.in-ws{padding:8px 6px}
+.ed-win select.in.in-ws{width:auto;min-width:170px}
+@media (max-width:560px){.ed-task{grid-template-columns:minmax(0,1fr) 70px 36px}.ed-task > .in:first-child{grid-column:1 / -1}}
+.per-note{font-size:14px;color:var(--muted);padding:6px 10px 0}
+.tname small{display:block;font-size:13px;color:var(--muted)}
 .in-pts{text-align:center;font-variant-numeric:tabular-nums}
 .icon{width:36px;height:36px;border:0;background:transparent;border-radius:6px;font-size:22px;line-height:1;color:var(--muted)}
 .icon:hover{background:var(--hover);color:var(--warn)}
@@ -264,6 +269,7 @@ h3{font-size:17px;font-weight:600}
       <li>Your rating is the running total of those daily results. It moves at midnight, can’t fall below 0, and sets your rank. A bad run demotes you.</li>
       <li>Your rival is you at your recent form. Each day he scores your average from the previous seven days, never less than 60% of the points on offer, and he never skips a day.</li>
       <li>Score more than him to win the day. A perfect day always wins.</li>
+      <li>Weekly and monthly tasks sit outside the daily duel. Ticking one adds its points to that day’s result. One still open when its week or month closes takes its points away that night. A task added part-way through a week or month can earn points straight away but only starts costing you from the next full one. Your rival completes them at your recent rate, never less than 60%.</li>
     </ul>
   </details>
   </div>
@@ -300,42 +306,81 @@ const shift = (k, n) => { const d = dateOf(k); d.setDate(d.getDate() + n); retur
 const todayKey = () => keyOf(new Date());
 const fmtLong = k => dateOf(k).toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long'});
 const fmtShort = k => dateOf(k).toLocaleDateString('en-GB', {day:'numeric', month:'short'});
-const weekStart = k => shift(k, -((dateOf(k).getDay() + 6) % 7));
 const WD = ['S','M','T','W','T','F','S'];
 
 /* ---------- scoring ---------- */
 const objectives = () => (state.config && Array.isArray(state.config.objectives)) ? state.config.objectives : [];
 const tasksOf = o => Array.isArray(o.tasks) ? o.tasks : [];
+const every = t => (t.every === 'week' || t.every === 'month') ? t.every : 'day';
 const allTasks = () => objectives().flatMap(o => tasksOf(o));
-const possibleNow = () => allTasks().reduce((s, t) => s + (+t.pts || 0), 0);
+const dailyOf = o => tasksOf(o).filter(t => every(t) === 'day');
+const dailyTasks = () => allTasks().filter(t => every(t) === 'day');
+const periodic = type => objectives().flatMap(o => tasksOf(o).filter(t => every(t) === type).map(t => Object.assign({obj: o.name}, t)));
+const possibleNow = () => dailyTasks().reduce((s, t) => s + (+t.pts || 0), 0);
 const rec = k => state.logs[k];
-const pts = k => { const r = rec(k); if (!r || !r.done) return 0; let s = 0; for (const v of Object.values(r.done)) s += +v || 0; return s; };
+const sumOf = m => { let s = 0; if (m) for (const v of Object.values(m)) s += +v || 0; return s; };
+const pts = k => { const r = rec(k); return r ? sumOf(r.done) : 0; };
 const possible = k => { const r = rec(k); return (k === todayKey() || !r || r.possible == null) ? possibleNow() : (+r.possible || 0); };
 const RANKS = [['Bronze', 0], ['Silver', 1000], ['Gold', 1500], ['Platinum', 2000], ['Emerald', 2500], ['Diamond', 3000], ['Master', 3500], ['Grandmaster', 4000], ['Champion', 4500], ['Top 500', 5000]];
 function rankInfo(total) { let i = 0; while (i < RANKS.length - 1 && total >= RANKS[i + 1][1]) i++; const top = i === RANKS.length - 1; return {name: RANKS[i][0], base: RANKS[i][1], next: top ? null : RANKS[i + 1][1], nextName: top ? null : RANKS[i + 1][0], top}; }
 const signed = n => (n > 0 ? '+' : n < 0 ? '−' : '') + num(Math.abs(n));
 const ratingText = r => r >= 5000 ? '5000 + ' + num(r - 5000) : num(r);
 
+/* Weekly and monthly tasks. A week runs from the reset day (Sunday unless changed) for seven days;
+   a month runs from the 1st. Ticks are stored on the day they were made, in the day's `w` or `m` map.
+   A task only costs points in a period it existed for from the start (its `since` date). */
+const FIELD = {week: 'w', month: 'm'}, SNAP = {week: 'wp', month: 'mp'}, TYPES = ['week', 'month'];
+const weekStartDay = () => (state.config && +state.config.weekStart === 1) ? 1 : 0;
+const weekStart = k => shift(k, -((dateOf(k).getDay() - weekStartDay() + 7) % 7));
+const monthEnd = k => { const d = dateOf(k); return keyOf(new Date(d.getFullYear(), d.getMonth() + 1, 0)); };
+const periodOf = (type, k) => type === 'week' ? {start: weekStart(k), end: shift(weekStart(k), 6)} : {start: k.slice(0, 8) + '01', end: monthEnd(k)};
+function offerNow(type, p) { const o = {}; periodic(type).forEach(t => { if (t.since && t.since <= p.start) o[t.id] = +t.pts || 0; }); return o; }
+function offer(type, p) { const r = rec(p.end), snap = r && r[SNAP[type]]; return (snap && p.end < todayKey()) ? snap : offerNow(type, p); }
+function ticksIn(type, p) {
+  const out = {};
+  for (let k = p.start; k <= p.end; k = shift(k, 1)) { const m = rec(k) && rec(k)[FIELD[type]]; if (m) for (const id in m) if (!(id in out)) out[id] = {day: k, pts: +m[id] || 0}; }
+  return out;
+}
+
 /* The rules, in one pass over every day since the first scored one.
-   A day's result = points ticked minus points left open at 00:00.
+   A day's result = points ticked minus points left open at 00:00, plus weekly and monthly points
+   ticked that day, minus weekly and monthly points still open on the day their period closes.
    Rating = running total of results, never below 0, moving only at midnight.
-   The rival scores your average of the previous seven days, never under 60% of the day's points. */
+   The rival scores your average of the previous seven days, never under 60% of the day's points,
+   and completes weekly and monthly tasks at your recent rate, never under 60%. */
 const RIVAL_FLOOR = 0.6;
 let S = null;
 function compute() {
   const t = todayKey(); let f = null;
-  for (const k in state.logs) if (pts(k) > 0 && (!f || k < f)) f = k;
+  for (const k in state.logs) { const r = state.logs[k]; if ((sumOf(r.done) > 0 || sumOf(r.w) > 0 || sumOf(r.m) > 0) && (!f || k < f)) f = k; }
   const out = {t, f, day: {}, rating: 0, rivalRating: 0, w: 0, d: 0, l: 0, streak: 0, bestStreak: 0, last: null};
-  const hist = []; let r = 0, rr = 0, run = 0;
+  const hist = [], seen = {week: {start: '', ids: new Set()}, month: {start: '', ids: new Set()}}, form = {week: [], month: []};
+  let r = 0, rr = 0, run = 0;
   for (let k = f || t; k <= t; k = shift(k, 1)) {
-    const poss = possible(k), earned = pts(k), floor = Math.ceil(poss * RIVAL_FLOOR);
+    const poss = possible(k), earned = pts(k), floor = Math.ceil(poss * RIVAL_FLOOR), open = k === t;
     let rv = floor;
     if (hist.length) { const w = hist.slice(-7); rv = Math.round(w.reduce((a, b) => a + b, 0) / w.length); }
     rv = Math.min(poss, Math.max(floor, rv));
-    const open = k === t;
-    const net = earned - Math.max(0, poss - earned), rnet = rv - (poss - rv);
+    let bonus = 0, pen = 0, rextra = 0;
+    for (const type of TYPES) {
+      const p = periodOf(type, k), s = seen[type];
+      if (s.start !== p.start) { s.start = p.start; s.ids = new Set(); }
+      const m = rec(k) && rec(k)[FIELD[type]];
+      if (m) for (const id in m) if (!s.ids.has(id)) { s.ids.add(id); bonus += +m[id] || 0; }
+      if (k === p.end) {                                  // the period closes tonight
+        const off = offer(type, p); let total = 0, got = 0;
+        for (const id in off) { total += +off[id] || 0; if (s.ids.has(id)) got += +off[id] || 0; }
+        pen += total - got;
+        if (total > 0) {
+          const past = form[type].slice(-4), rate = Math.min(1, Math.max(RIVAL_FLOOR, past.length ? past.reduce((a, b) => a + b, 0) / past.length : RIVAL_FLOOR));
+          rextra += Math.round((2 * rate - 1) * total);
+          if (!open) form[type].push(got / total);
+        }
+      }
+    }
+    const net = earned - Math.max(0, poss - earned) + bonus - pen, rnet = rv - (poss - rv) + rextra;
     const res = earned > rv ? 'W' : earned < rv ? 'L' : (poss > 0 && earned >= poss ? 'W' : 'D');
-    const o = {earned, poss, rival: rv, net, rnet, res, open};
+    const o = {earned, poss, rival: rv, net, rnet, res, open, bonus, pen};
     if (!open) {
       r = Math.max(0, r + net); rr = Math.max(0, rr + rnet);
       if (res === 'W') out.w++; else if (res === 'D') out.d++; else out.l++;
@@ -350,14 +395,17 @@ function compute() {
   out.rating = r; out.rivalRating = rr;
   return out;
 }
-/* Give every closed day a record, so the points it had on offer stay fixed when tasks change later. */
+/* Give every closed day a record, and every closed week and month a snapshot of the tasks it had
+   on offer, so later edits to tasks never rewrite history. */
 function stampGaps() {
   const years = new Set(), f = S && S.f, t = todayKey(), pn = possibleNow();
   if (!f) return years;
   for (let k = f; k < t; k = shift(k, 1)) {
-    const r = state.logs[k];
-    if (!r) { state.logs[k] = {done: {}, possible: pn}; years.add(k.slice(0, 4)); }
-    else if (r.possible == null) { r.possible = pn; years.add(k.slice(0, 4)); }
+    let r = state.logs[k], hit = false;
+    if (!r) { r = state.logs[k] = {done: {}, possible: pn}; hit = true; }
+    else if (r.possible == null) { r.possible = pn; hit = true; }
+    for (const type of TYPES) { const p = periodOf(type, k); if (k === p.end && !r[SNAP[type]]) { r[SNAP[type]] = offerNow(type, p); hit = true; } }
+    if (hit) years.add(k.slice(0, 4));
   }
   return years;
 }
@@ -424,16 +472,22 @@ const daysOf = y => { const o = {}; for (const k in state.logs) if (k.startsWith
    ticked or unticked, and the most recent action wins, task by task. */
 function mergeDay(a, b) {
   if (!a) return b; if (!b) return a;
-  const done = {}, at = {}, aa = a.at || {}, ba = b.at || {}, ad = a.done || {}, bd = b.done || {};
+  const out = {done: {}}, at = {}, aa = a.at || {}, ba = b.at || {};
   let la = 0, lb = 0;
-  for (const id of new Set([...Object.keys(aa), ...Object.keys(ba), ...Object.keys(ad), ...Object.keys(bd)])) {
-    const ta = +aa[id] || 0, tb = +ba[id] || 0, src = tb > ta ? bd : ad;
-    if (src[id] != null) done[id] = src[id];
-    if (ta || tb) at[id] = Math.max(ta, tb);
-    if (ta > la) la = ta; if (tb > lb) lb = tb;
+  for (const id in aa) if (+aa[id] > la) la = +aa[id];
+  for (const id in ba) if (+ba[id] > lb) lb = +ba[id];
+  for (const f of ['done', 'w', 'm']) {
+    const am = a[f] || {}, bm = b[f] || {};
+    for (const id of new Set([...Object.keys(am), ...Object.keys(bm)])) {
+      const ta = +aa[id] || 0, tb = +ba[id] || 0;
+      const v = (!ta && !tb) ? (am[id] != null ? am[id] : bm[id]) : (tb > ta ? bm[id] : am[id]);
+      if (v != null) (out[f] || (out[f] = {}))[id] = v;
+    }
   }
-  const out = {done, at}, p = lb > la ? (b.possible != null ? b.possible : a.possible) : (a.possible != null ? a.possible : b.possible);
-  if (p != null) out.possible = p;
+  for (const id of new Set([...Object.keys(aa), ...Object.keys(ba)])) at[id] = Math.max(+aa[id] || 0, +ba[id] || 0);
+  out.at = at;
+  const newer = lb > la ? b : a, older = lb > la ? a : b;
+  for (const f of ['possible', 'wp', 'mp']) { const v = newer[f] != null ? newer[f] : older[f]; if (v != null) out[f] = v; }
   return out;
 }
 function mergeYear(y, remote, localDirty) {
@@ -630,7 +684,8 @@ function renderBoard() {
     else if (p > rv) l1 = 'Ahead of your rival by ' + (p - rv) + '.';
     else if (p === rv) l1 = 'Level with your rival. One more task takes the day.';
     else l1 = (rv - p) + ' behind your rival.';
-    l2 = p >= poss ? 'Midnight has nothing left to take.' : 'Stop here and midnight takes ' + (poss - p) + ', so today lands at ' + signed(td.net) + '.';
+    const take = Math.max(0, poss - p) + td.pen;
+    l2 = take ? 'Stop here and midnight takes ' + take + (td.pen ? ' (' + td.pen + ' from tasks closing tonight)' : '') + ', so today lands at ' + signed(td.net) + '.' : 'Midnight has nothing left to take.';
   }
   const days = []; for (let i = 13; i >= 0; i--) days.push(shift(t, -i));
   const sel = state.selected || t;
@@ -702,7 +757,8 @@ function renderTasks(force) {
   const known = new Set();
   for (const o of objs) {
     let got = 0, per = 0, rows = '';
-    for (const x of tasksOf(o)) {
+    const mine = dailyOf(o); if (!mine.length && tasksOf(o).length) continue;
+    for (const x of mine) {
       known.add(x.id);
       const isDone = done[x.id] != null, v = isDone ? (+done[x.id] || 0) : (+x.pts || 0);
       per += v; if (isDone) got += v;
@@ -712,17 +768,55 @@ function renderTasks(force) {
     h += '<section class="obj"><div class="obj-head"><h3>' + esc(o.name) + '</h3><span class="sub">' + got + ' / ' + per + '</span></div>' +
       (rows ? '<ul>' + rows + '</ul>' : '<p class="quiet" style="padding:10px">No tasks in this objective yet.</p>') + '</section>';
   }
+  if (isToday) h += renderPeriod('week') + renderPeriod('month');
   let orphan = 0; for (const id in done) if (!known.has(id)) orphan += +done[id] || 0;
   if (locked) h += '<p class="quiet" style="margin-top:14px;padding:0 10px">This day closed at midnight and can’t be changed.</p>';
   if (orphan) h += '<p class="quiet" style="margin-top:14px;padding:0 10px">Plus ' + orphan + ' points from tasks you’ve since removed.</p>';
   el.innerHTML = h;
   state.just = null;
 }
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+function renderPeriod(type) {
+  const list = periodic(type); if (!list.length) return '';
+  const t = todayKey(), p = periodOf(type, t), off = offer(type, p), ticks = ticksIn(type, p);
+  let got = 0, total = 0, rows = '';
+  for (const x of list) {
+    const hit = ticks[x.id], v = hit ? hit.pts : (+x.pts || 0), counts = x.id in off;
+    total += v; if (hit) got += v;
+    const sub = hit ? (hit.day === t ? 'Done today' : 'Done ' + fmtShort(hit.day)) : (counts ? '' : (type === 'week' ? 'No penalty this week' : 'No penalty this month'));
+    rows += '<li><button type="button" class="task' + (hit ? ' done' : '') + (state.just === x.id ? ' just' : '') + '" data-ptask="' + esc(x.id) + '" data-ptype="' + type + '" data-fk="ptask-' + esc(x.id) + '" aria-pressed="' + !!hit + '">' +
+      '<span class="box">' + CHECK + '</span><span class="tname">' + esc(x.name) + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span><span class="tpts">' + (hit ? '+' : '') + v + '</span></button></li>';
+  }
+  const left = Math.round((dateOf(p.end) - dateOf(t)) / 86400000);
+  const reset = type === 'week' ? WEEKDAYS[weekStartDay()] : 'the 1st';
+  const when = left === 0 ? 'Closes tonight at 00:00.' : 'Resets ' + reset + ' at 00:00, ' + (left + 1) + ' days left.';
+  return '<section class="obj per"><div class="obj-head"><h3>' + (type === 'week' ? 'This week' : 'This month') + '</h3><span class="sub">' + got + ' / ' + total + '</span></div>' +
+    '<p class="per-note">' + when + '</p><ul>' + rows + '</ul></section>';
+}
+function togglePeriodic(type, id) {
+  if (!state.loaded) return;
+  const t = todayKey(), p = periodOf(type, t), f = FIELD[type];
+  const task = periodic(type).find(x => x.id === id); if (!task) return;
+  const years = stampGaps(), now = Date.now();
+  if (ticksIn(type, p)[id]) {                             // untick: clear it wherever in this period it was ticked
+    for (let k = p.start; k <= t; k = shift(k, 1)) {
+      const r = state.logs[k];
+      if (r && r[f] && r[f][id] != null) { delete r[f][id]; (r.at || (r.at = {}))[id] = now; years.add(k.slice(0, 4)); }
+    }
+  } else {
+    const r = state.logs[t] || (state.logs[t] = {done: {}});
+    (r[f] || (r[f] = {}))[id] = +task.pts || 0; (r.at || (r.at = {}))[id] = now;
+    if (r.possible == null) r.possible = possibleNow();
+    state.just = id; years.add(t.slice(0, 4));
+  }
+  years.forEach(y => touch('log/' + y + '.json'));
+  renderAll();
+}
 function toggle(taskId) {
   if (!state.loaded) return;
   const t = todayKey(), k = state.selected || t;
   if (k !== t && state.config && state.config.lock) return;
-  const task = allTasks().find(x => x.id === taskId); if (!task) return;
+  const task = dailyTasks().find(x => x.id === taskId); if (!task) return;
   const before = S.day[k] ? S.day[k].res : null;
   const years = stampGaps();
   const r = state.logs[k] || (state.logs[k] = {done: {}});
@@ -751,11 +845,12 @@ function renderEditor(el) {
   el.dataset.view = 'edit';
   const d = state.draft;
   let h = '<div class="col-head"><h2>Edit objectives</h2></div>' +
-    '<p class="quiet">Each task has a point value. Ticked, it adds them. Still open at 00:00, it takes them away.</p>';
+    '<p class="quiet">Each task has a point value. Ticked, it adds them. Still open when its day, week or month closes at 00:00, it takes them away.</p>';
   d.objectives.forEach((o, i) => {
     h += '<div class="ed-obj"><div class="ed-obj-top"><input class="in in-obj" data-f="oname" data-o="' + i + '" data-fk="on-' + i + '" aria-label="Objective name" placeholder="Objective name" maxlength="80" value="' + esc(o.name || '') + '"></div><ul>';
     o.tasks.forEach((x, j) => {
-      h += '<li class="ed-task"><input class="in" data-f="tname" data-o="' + i + '" data-t="' + j + '" data-fk="tn-' + i + '-' + j + '" aria-label="Task" placeholder="Daily task" maxlength="120" value="' + esc(x.name || '') + '">' +
+      h += '<li class="ed-task"><input class="in" data-f="tname" data-o="' + i + '" data-t="' + j + '" data-fk="tn-' + i + '-' + j + '" aria-label="Task" placeholder="Task" maxlength="120" value="' + esc(x.name || '') + '">' +
+        '<select class="in in-every" data-f="tevery" data-o="' + i + '" data-t="' + j + '" data-fk="te-' + i + '-' + j + '" aria-label="How often">' + ['day', 'week', 'month'].map(v => '<option value="' + v + '"' + (every(x) === v ? ' selected' : '') + '>' + {day: 'Daily', week: 'Weekly', month: 'Monthly'}[v] + '</option>').join('') + '</select>' +
         '<input class="in in-pts" type="number" min="1" max="999" inputmode="numeric" data-f="tpts" data-o="' + i + '" data-t="' + j + '" data-fk="tp-' + i + '-' + j + '" aria-label="Points" value="' + esc(x.pts) + '">' +
         '<button type="button" class="icon" data-act="del-task" data-o="' + i + '" data-t="' + j + '" aria-label="Remove task">×</button></li>';
     });
@@ -763,20 +858,26 @@ function renderEditor(el) {
       '<button type="button" class="link danger" data-act="del-obj" data-o="' + i + '">Remove objective</button></div></div>';
   });
   h += '<div class="ed-add"><button type="button" class="btn" data-act="add-obj">Add an objective</button></div>' +
+    '<label class="ed-win">Weekly tasks reset on <select class="in in-ws" data-f="ws" data-fk="ws"><option value="0"' + (+d.weekStart === 1 ? '' : ' selected') + '>Sunday at 00:00</option><option value="1"' + (+d.weekStart === 1 ? ' selected' : '') + '>Monday at 00:00</option></select></label>' +
     '<div class="ed-foot"><button type="button" class="btn primary" data-act="save">Save changes</button><button type="button" class="btn" data-act="cancel">Cancel</button></div>';
   el.innerHTML = h;
 }
 function saveEdit() {
-  const out = [];
+  const out = [], prev = {}; allTasks().forEach(x => { prev[x.id] = x; });
   for (const o of state.draft.objectives) {
-    const tasks = o.tasks.map(x => ({id: x.id || newId('t'), name: String(x.name || '').trim().slice(0, 120), pts: Math.min(999, Math.max(1, Math.round(+x.pts) || 10))})).filter(x => x.name);
+    const tasks = o.tasks.map(x => {
+      const task = {id: x.id || newId('t'), name: String(x.name || '').trim().slice(0, 120), pts: Math.min(999, Math.max(1, Math.round(+x.pts) || 10))}, ev = every(x);
+      if (ev !== 'day') { const was = prev[task.id]; task.every = ev; task.since = (was && every(was) === ev && was.since) ? was.since : todayKey(); }
+      return task;
+    }).filter(x => x.name);
     const name = String(o.name || '').trim().slice(0, 80);
     if (!name && !tasks.length) continue;
     out.push({id: o.id || newId('o'), name: name || 'Untitled objective', tasks});
   }
   const years = stampGaps();
+  const ws = +state.draft.weekStart === 1 ? 1 : 0;
   state.editing = false; state.draft = null;
-  setConfig({objectives: out});
+  setConfig({objectives: out, weekStart: ws});
   const t = todayKey(), r = state.logs[t];
   if (r) { r.possible = possibleNow(); years.add(t.slice(0, 4)); }
   years.forEach(y => touch('log/' + y + '.json'));
@@ -883,7 +984,7 @@ function renderChart() {
   const SW = '<i class="sw" style="background:var(--accent)"></i>Positive</span><span><i class="sw" style="background:var(--warn)"></i>Negative';
   if (state.chart === 'weeks') {
     host.innerHTML = chartWeeks(W, H);
-    lg.innerHTML = '<span>' + SW + '</span><span>Monday to Sunday, closed days only. The faded bar is this week.</span>';
+    lg.innerHTML = '<span>' + SW + '</span><span>' + WEEKDAYS[weekStartDay()] + ' to ' + WEEKDAYS[(weekStartDay() + 6) % 7] + ', closed days only. The faded bar is this week.</span>';
   } else if (state.chart === 'total') {
     if (S.f >= S.t) { host.innerHTML = '<p class="quiet empty-chart">Your rating line starts after your first midnight.</p>'; lg.innerHTML = ''; return; }
     host.innerHTML = chartRating(W, H);
@@ -902,13 +1003,14 @@ function renderByObj() {
   sub.textContent = 'Share of available points taken over the last ' + nd + (nd === 1 ? ' day' : ' days');
   let h = '';
   for (const o of objs) {
-    const per = tasksOf(o).reduce((s, x) => s + (+x.pts || 0), 0);
+    const mine = dailyOf(o); if (!mine.length) continue;
+    const per = mine.reduce((s, x) => s + (+x.pts || 0), 0);
     let earned = 0;
-    ks.forEach(k => { const r = rec(k); if (!r || !r.done) return; tasksOf(o).forEach(x => { if (r.done[x.id] != null) earned += +r.done[x.id] || 0; }); });
+    ks.forEach(k => { const r = rec(k); if (!r || !r.done) return; mine.forEach(x => { if (r.done[x.id] != null) earned += +r.done[x.id] || 0; }); });
     const rate = per ? Math.min(100, Math.round(100 * earned / (per * nd))) : 0;
     h += '<div class="orow"><div class="orow-top"><span>' + esc(o.name) + '</span><b>' + rate + '%</b></div><div class="track"><i style="width:' + rate + '%"></i></div></div>';
   }
-  const tl = allTasks().map(x => { let hits = 0; ks.forEach(k => { const r = rec(k); if (r && r.done && r.done[x.id] != null) hits++; }); return {x, hits}; });
+  const tl = dailyTasks().map(x => { let hits = 0; ks.forEach(k => { const r = rec(k); if (r && r.done && r.done[x.id] != null) hits++; }); return {x, hits}; });
   if (nd >= 3 && tl.length >= 2) {
     let hi = tl[0], lo = tl[0];
     tl.forEach(a => { if (a.hits > hi.hits) hi = a; if (a.hits < lo.hits || (a.hits === lo.hits && (+a.x.pts || 0) > (+lo.x.pts || 0))) lo = a; });
@@ -931,6 +1033,7 @@ function renderAll() {
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.task) { toggle(b.dataset.task); return; }
+  if (b.dataset.ptask) { togglePeriodic(b.dataset.ptype, b.dataset.ptask); return; }
   if (b.dataset.day) { state.selected = b.dataset.day === todayKey() ? null : b.dataset.day; renderAll(); return; }
   if (b.dataset.chart) { state.chart = b.dataset.chart; renderChart(); return; }
   if (b.dataset.hour) {
@@ -963,7 +1066,9 @@ document.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.target.i
 document.addEventListener('input', e => {
   const i = e.target, d = state.draft;
   if (!state.editing || !d || !i.dataset || !i.dataset.f) return;
+  if (i.dataset.f === 'ws') { d.weekStart = +i.value; return; }
   const o = d.objectives[+i.dataset.o]; if (!o) return;
+  if (i.dataset.f === 'tevery') { o.tasks[+i.dataset.t].every = i.value; return; }
   if (i.dataset.f === 'oname') o.name = i.value;
   else if (i.dataset.f === 'tname') o.tasks[+i.dataset.t].name = i.value;
   else if (i.dataset.f === 'tpts') o.tasks[+i.dataset.t].pts = i.value;
