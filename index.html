@@ -971,7 +971,12 @@ function saveEdit() {
   state.editing = false; state.draft = null;
   setConfig({objectives: out, weekStart: ws});
   const t = todayKey(), r = state.logs[t];
-  if (r) { r.possible = possibleNow(); years.add(t.slice(0, 4)); }
+  if (r) {
+    // Today is scored against today's tasks: drop ticks that belong to tasks removed in this edit.
+    const keep = new Set(allTasks().map(x => x.id)), now = Date.now();
+    for (const f of ['done', 'n', 'x']) if (r[f]) for (const id in r[f]) if (!keep.has(id)) { delete r[f][id]; (r.at || (r.at = {}))[id] = now; }
+    r.possible = possibleNow(); years.add(t.slice(0, 4));
+  }
   years.forEach(y => touch('log/' + y + '.json'));
   renderAll();
   say('Changes saved.');
